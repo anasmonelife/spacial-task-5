@@ -9,13 +9,20 @@ import { PanchayathManagement } from "@/components/admin/PanchayathManagement";
 import { AgentTestimonialAnalytics } from "@/components/admin/AgentTestimonialAnalytics";
 import { PerformanceReport } from "@/components/admin/PerformanceReport";
 import { TodoList } from "@/components/admin/TodoList";
-import { ArrowLeft, Shield, BarChart3, MapPin, MessageSquare, TrendingDown, ListTodo, Mail, Loader2 } from "lucide-react";
+import { ArrowLeft, Shield, BarChart3, MapPin, MessageSquare, TrendingDown, ListTodo, Phone, Loader2 } from "lucide-react";
 import { DailyNoteCard } from "@/components/DailyNoteCard";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { User as AuthUser, Session } from "@supabase/supabase-js";
 import { User } from "@/lib/authService";
+
+interface AdminMember {
+  id: string;
+  name: string;
+  mobile: string;
+  is_approved: boolean | null;
+  is_active: boolean | null;
+}
 
 const TeamAdmin = () => {
   const navigate = useNavigate();
@@ -24,33 +31,10 @@ const TeamAdmin = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   
   // Auth state
-  const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [email, setEmail] = useState("");
-  const [otp, setOtp] = useState("");
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [adminMember, setAdminMember] = useState<AdminMember | null>(null);
+  const [mobile, setMobile] = useState("");
   const [loading, setLoading] = useState(false);
-  const [checkingAuth, setCheckingAuth] = useState(true);
-  const [otpSent, setOtpSent] = useState(false);
-
-  useEffect(() => {
-    // Set up auth state listener FIRST
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        setCheckingAuth(false);
-      }
-    );
-
-    // THEN check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setCheckingAuth(false);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
 
   // Get current user from localStorage on component mount
   useEffect(() => {
@@ -60,12 +44,12 @@ const TeamAdmin = () => {
     }
   }, []);
 
-  const handleSendOtp = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) {
+    if (!mobile.trim()) {
       toast({
-        title: "Email Required",
-        description: "Please enter your email address",
+        title: "Mobile Required",
+        description: "Please enter your mobile number",
         variant: "destructive",
       });
       return;
@@ -73,27 +57,76 @@ const TeamAdmin = () => {
 
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email: email.trim(),
-      });
+      // Check admin_members table for mobile number
+      const { data, error } = await supabase
+        .from('admin_members')
+        .select('id, name, mobile, is_approved, is_active')
+        .eq('mobile', mobile.trim())
+        .limit(1);
 
       if (error) {
         toast({
           title: "Error",
-          description: error.message,
+          description: "Failed to verify credentials",
           variant: "destructive",
         });
-      } else {
-        setOtpSent(true);
-        toast({
-          title: "OTP Sent",
-          description: "Check your email for the verification code",
-        });
+        return;
       }
+
+      if (!data || data.length === 0) {
+        toast({
+          title: "Not Found",
+          description: "No team admin found with this mobile number",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const member = data[0];
+
+      // Check if approved
+      if (!member.is_approved) {
+        toast({
+          title: "Not Approved",
+          description: "Your account is pending approval. Please contact Super Admin.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Check if active
+      if (!member.is_active) {
+        toast({
+          title: "Account Inactive",
+          description: "Your account has been deactivated. Please contact Super Admin.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setAdminMember(member);
+      setIsAuthenticated(true);
+      
+      // Also set currentUser for compatibility with other components
+      const userObj: User = {
+        id: member.id,
+        name: member.name,
+        mobile_number: member.mobile,
+        role: 'admin_member',
+        table: 'admin_members',
+        hasAdminAccess: true,
+      };
+      setCurrentUser(userObj);
+      localStorage.setItem('currentUser', JSON.stringify(userObj));
+
+      toast({
+        title: "Login Successful",
+        description: `Welcome, ${member.name}!`,
+      });
     } catch (error: any) {
       toast({
         title: "Error",
-        description: error.message || "Failed to send OTP",
+        description: error.message || "Failed to login",
         variant: "destructive",
       });
     } finally {
@@ -101,53 +134,11 @@ const TeamAdmin = () => {
     }
   };
 
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!otp.trim()) {
-      toast({
-        title: "OTP Required",
-        description: "Please enter the verification code",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const { error } = await supabase.auth.verifyOtp({
-        email: email.trim(),
-        token: otp.trim(),
-        type: 'email',
-      });
-
-      if (error) {
-        toast({
-          title: "Verification Failed",
-          description: error.message,
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Login Successful",
-          description: "Welcome to Team Admin Panel",
-        });
-      }
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to verify OTP",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    setEmail("");
-    setOtp("");
-    setOtpSent(false);
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    setAdminMember(null);
+    setMobile("");
+    localStorage.removeItem('currentUser');
     toast({
       title: "Logged Out",
       description: "You have been logged out of Team Admin Panel",
@@ -155,15 +146,7 @@ const TeamAdmin = () => {
     navigate("/");
   };
 
-  if (checkingAuth) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-background to-background/95 flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  if (!session) {
+  if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-background to-background/95 flex items-center justify-center p-6">
         <Card className="w-full max-w-md">
@@ -173,63 +156,37 @@ const TeamAdmin = () => {
             </div>
             <CardTitle className="text-2xl font-bold">Team Admin Login</CardTitle>
             <CardDescription>
-            {otpSent 
-                ? "Click the link sent to your email to login" 
-                : "Enter your email to receive a login link"}
+              Enter your registered mobile number to access the panel
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {!otpSent ? (
-              <form onSubmit={handleSendOtp} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email Address</Label>
-                  <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      id="email"
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="Enter your email"
-                      className="pl-10"
-                      required
-                    />
-                  </div>
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="mobile">Mobile Number</Label>
+                <div className="relative">
+                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="mobile"
+                    type="tel"
+                    value={mobile}
+                    onChange={(e) => setMobile(e.target.value)}
+                    placeholder="Enter your mobile number"
+                    className="pl-10"
+                    required
+                  />
                 </div>
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Sending...
-                    </>
-                  ) : (
-                    "Send Login Link"
-                  )}
-                </Button>
-              </form>
-            ) : (
-              <div className="space-y-4 text-center">
-                <div className="p-4 bg-muted rounded-lg">
-                  <Mail className="h-12 w-12 mx-auto text-primary mb-3" />
-                  <p className="text-sm text-muted-foreground">
-                    We've sent a login link to <strong>{email}</strong>
-                  </p>
-                  <p className="text-sm text-muted-foreground mt-2">
-                    Click the link in your email to sign in. This page will update automatically.
-                  </p>
-                </div>
-                <Button 
-                  type="button" 
-                  variant="outline" 
-                  className="w-full" 
-                  onClick={() => {
-                    setOtpSent(false);
-                  }}
-                >
-                  Use Different Email
-                </Button>
               </div>
-            )}
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Verifying...
+                  </>
+                ) : (
+                  "Login"
+                )}
+              </Button>
+            </form>
             <div className="mt-4 text-center">
               <Button variant="link" onClick={() => navigate("/")} className="text-sm">
                 Back to Home
@@ -256,7 +213,7 @@ const TeamAdmin = () => {
                 Team Admin Panel
               </h1>
               <p className="text-muted-foreground mt-2 text-sm sm:text-base">
-                Manage teams and administrative settings
+                Welcome, {adminMember?.name}
               </p>
             </div>
           </div>

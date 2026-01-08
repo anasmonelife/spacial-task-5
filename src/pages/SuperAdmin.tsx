@@ -1,56 +1,39 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, Shield, Users, MessageSquare, Mail, Loader2, UserCog } from "lucide-react";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { ArrowLeft, Shield, Users, MessageSquare, Loader2, UserCog, Lock, User } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { AdminTeamManagement } from "@/components/admin/AdminTeamManagement";
 import { TestimonialManagementSimple } from "@/components/admin/TestimonialManagementSimple";
 import { TeamAdminManagement } from "@/components/admin/TeamAdminManagement";
-import { User as AuthUser, Session } from "@supabase/supabase-js";
+
+interface SuperAdminUser {
+  id: string;
+  name: string;
+  username: string;
+}
 
 const SuperAdmin = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [email, setEmail] = useState("");
-  const [otp, setOtp] = useState("");
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [adminUser, setAdminUser] = useState<SuperAdminUser | null>(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [checkingAuth, setCheckingAuth] = useState(true);
-  const [otpSent, setOtpSent] = useState(false);
   const [activeTab, setActiveTab] = useState("user-management");
 
-  useEffect(() => {
-    // Set up auth state listener FIRST
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        setCheckingAuth(false);
-      }
-    );
-
-    // THEN check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setCheckingAuth(false);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  const handleSendOtp = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) {
+    if (!username.trim() || !password.trim()) {
       toast({
-        title: "Email Required",
-        description: "Please enter your email address",
+        title: "Missing Credentials",
+        description: "Please enter both username and password",
         variant: "destructive",
       });
       return;
@@ -58,69 +41,55 @@ const SuperAdmin = () => {
 
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email: email.trim(),
-      });
+      // Check super_admins table for credentials
+      const { data, error } = await supabase
+        .from('super_admins')
+        .select('id, name, username, password_hash')
+        .eq('username', username.trim())
+        .limit(1);
 
       if (error) {
         toast({
           title: "Error",
-          description: error.message,
+          description: "Failed to verify credentials",
           variant: "destructive",
         });
-      } else {
-        setOtpSent(true);
-        toast({
-          title: "OTP Sent",
-          description: "Check your email for the verification code",
-        });
+        return;
       }
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to send OTP",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!otp.trim()) {
-      toast({
-        title: "OTP Required",
-        description: "Please enter the verification code",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const { error } = await supabase.auth.verifyOtp({
-        email: email.trim(),
-        token: otp.trim(),
-        type: 'email',
-      });
-
-      if (error) {
+      if (!data || data.length === 0) {
         toast({
-          title: "Verification Failed",
-          description: error.message,
+          title: "Login Failed",
+          description: "Invalid username or password",
           variant: "destructive",
         });
-      } else {
+        return;
+      }
+
+      const admin = data[0];
+      // Simple password check (in production, use proper hashing)
+      if (admin.password_hash === password.trim()) {
+        setAdminUser({
+          id: admin.id,
+          name: admin.name,
+          username: admin.username,
+        });
+        setIsAuthenticated(true);
         toast({
           title: "Login Successful",
-          description: "Welcome to Super Admin Panel",
+          description: `Welcome, ${admin.name}!`,
+        });
+      } else {
+        toast({
+          title: "Login Failed",
+          description: "Invalid username or password",
+          variant: "destructive",
         });
       }
     } catch (error: any) {
       toast({
         title: "Error",
-        description: error.message || "Failed to verify OTP",
+        description: error.message || "Failed to login",
         variant: "destructive",
       });
     } finally {
@@ -128,11 +97,11 @@ const SuperAdmin = () => {
     }
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    setEmail("");
-    setOtp("");
-    setOtpSent(false);
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    setAdminUser(null);
+    setUsername("");
+    setPassword("");
     toast({
       title: "Logged Out",
       description: "You have been logged out of Super Admin Panel",
@@ -140,15 +109,7 @@ const SuperAdmin = () => {
     navigate("/");
   };
 
-  if (checkingAuth) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-background to-background/95 flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  if (!session) {
+  if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-background to-background/95 flex items-center justify-center p-6">
         <Card className="w-full max-w-md">
@@ -158,63 +119,52 @@ const SuperAdmin = () => {
             </div>
             <CardTitle className="text-2xl font-bold">Super Admin Login</CardTitle>
             <CardDescription>
-            {otpSent 
-                ? "Click the link sent to your email to login" 
-                : "Enter your email to receive a login link"}
+              Enter your credentials to access the admin panel
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {!otpSent ? (
-              <form onSubmit={handleSendOtp} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email Address</Label>
-                  <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      id="email"
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="Enter your email"
-                      className="pl-10"
-                      required
-                    />
-                  </div>
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="username">Username</Label>
+                <div className="relative">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="username"
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="Enter your username"
+                    className="pl-10"
+                    required
+                  />
                 </div>
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Sending...
-                    </>
-                  ) : (
-                    "Send Login Link"
-                  )}
-                </Button>
-              </form>
-            ) : (
-              <div className="space-y-4 text-center">
-                <div className="p-4 bg-muted rounded-lg">
-                  <Mail className="h-12 w-12 mx-auto text-primary mb-3" />
-                  <p className="text-sm text-muted-foreground">
-                    We've sent a login link to <strong>{email}</strong>
-                  </p>
-                  <p className="text-sm text-muted-foreground mt-2">
-                    Click the link in your email to sign in. This page will update automatically.
-                  </p>
-                </div>
-                <Button 
-                  type="button" 
-                  variant="outline" 
-                  className="w-full" 
-                  onClick={() => {
-                    setOtpSent(false);
-                  }}
-                >
-                  Use Different Email
-                </Button>
               </div>
-            )}
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter your password"
+                    className="pl-10"
+                    required
+                  />
+                </div>
+              </div>
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Logging in...
+                  </>
+                ) : (
+                  "Login"
+                )}
+              </Button>
+            </form>
             <div className="mt-4 text-center">
               <Button variant="link" onClick={() => navigate("/")} className="text-sm">
                 Back to Home
@@ -241,7 +191,7 @@ const SuperAdmin = () => {
                 Super Admin Panel
               </h1>
               <p className="text-muted-foreground mt-2 text-sm sm:text-base">
-                System-wide administration and control
+                Welcome, {adminUser?.name}
               </p>
             </div>
           </div>
@@ -306,48 +256,6 @@ const SuperAdmin = () => {
 
         {/* Content Area */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsContent value="overview">
-            <Card>
-              <CardHeader>
-                <CardTitle>System Overview</CardTitle>
-                <CardDescription>
-                  Monitor overall system health and performance
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm font-medium">Total Users</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="text-2xl font-bold">1,234</div>
-                      <p className="text-xs text-muted-foreground">Across all roles</p>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm font-medium">Active Teams</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="text-2xl font-bold">56</div>
-                      <p className="text-xs text-muted-foreground">Team admin groups</p>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm font-medium">System Health</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="text-2xl font-bold text-green-600">99.9%</div>
-                      <p className="text-xs text-muted-foreground">Uptime</p>
-                    </CardContent>
-                  </Card>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-          
           <TabsContent value="user-management">
             <AdminTeamManagement />
           </TabsContent>
@@ -359,7 +267,6 @@ const SuperAdmin = () => {
           <TabsContent value="testimonials">
             <TestimonialManagementSimple />
           </TabsContent>
-          
         </Tabs>
       </div>
     </div>
