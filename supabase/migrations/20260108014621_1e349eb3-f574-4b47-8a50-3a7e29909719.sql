@@ -1,0 +1,1 @@
+UPDATE public.super_admins SET password_hash = 'Eva919123' WHERE username = 'eva';
